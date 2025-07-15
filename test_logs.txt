@@ -1,0 +1,17 @@
+Jul 15 08:00:01 server sshd[1234]: Failed password for invalid user admin from 192.168.1.100 port 54321 ssh2
+Jul 15 08:00:02 server sshd[1235]: Failed password for invalid user root from 192.168.1.100 port 54322 ssh2
+Jul 15 08:00:03 server sshd[1236]: Failed password for invalid user test from 192.168.1.100 port 54323 ssh2
+Jul 15 08:00:04 server sshd[1237]: Failed password for invalid user user from 192.168.1.100 port 54324 ssh2
+Jul 15 08:00:05 server sshd[1238]: Failed password for root from 192.168.1.100 port 54325 ssh2
+Jul 15 08:00:06 server sshd[1239]: Failed password for admin from 192.168.1.100 port 54326 ssh2
+Jul 15 08:00:07 server sshd[1240]: Failed password for user from 192.168.1.100 port 54327 ssh2
+Jul 15 08:00:08 server sshd[1241]: Failed password for invalid user guest from 192.168.1.101 port 12345 ssh2
+Jul 15 08:00:09 server sshd[1242]: Failed password for invalid user test from 192.168.1.101 port 12346 ssh2
+Jul 15 08:00:10 server sshd[1243]: Failed password for root from 192.168.1.101 port 12347 ssh2
+Jul 15 08:00:11 server sshd[1244]: Accepted password for user_valid from 192.168.1.50 port 22222 ssh2
+Jul 15 08:00:12 server sshd[1245]: Failed password for invalid user ftpuser from 192.168.1.102 port 30000 ssh2
+Jul 15 08:00:13 server sshd[1246]: Failed password for admin from 192.168.1.102 port 30001 ssh2
+Jul 15 08:00:14 server sshd[1247]: Failed password for invalid user ubuntu from 192.168.1.102 port 30002 ssh2
+Jul 15 08:00:15 server sshd[1248]: Failed password for root from 192.168.1.102 port 30003 ssh2
+Jul 15 08:00:16 server sshd[1249]: Failed password for user from 192.168.1.102 port 30004 ssh2
+Jul 15 08:00:17 server sshd[1250]: Failed password for admin from 192.168.1.102 port 30005 ssh2
