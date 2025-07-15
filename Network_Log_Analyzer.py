@@ -95,12 +95,13 @@ def analyze_brute_force(parsed_logs, time_window_minutes=1, max_attempts=5):
         if len(ip_failed_attempts[ip]) >= max_attempts:
             # Only add if this specific IP hasn't been flagged recently
             # This prevents duplicate flags for the same ongoing attack
-            last_flag_time = ip_failed_attempts[ip][0][0] # Timestamp of the first attempt in current window
             
             # Check if this IP was already flagged very recently to avoid spamming
             already_flagged_recently = False
             for flagged_item in brute_force_attempts:
-                if flagged_item['IP Address'] == ip and (timestamp - flagged_item['Last Attempt Time']).total_seconds() < (time_window_minutes * 60 / 2): # Half the window to avoid re-flagging too fast
+                # IMPORTANT FIX: Compare datetime objects directly
+                # flagged_item['Last Attempt Time'] must be a datetime object here
+                if flagged_item['IP Address'] == ip and (timestamp - flagged_item['Last Attempt Time_DT']).total_seconds() < (time_window_minutes * 60 / 2): 
                     already_flagged_recently = True
                     break
             
@@ -108,8 +109,9 @@ def analyze_brute_force(parsed_logs, time_window_minutes=1, max_attempts=5):
                 brute_force_attempts.append({
                     "IP Address": ip,
                     "Failed Attempts": len(ip_failed_attempts[ip]),
-                    "First Attempt Time": ip_failed_attempts[ip][0][0].strftime("%Y-%m-%d %H:%M:%S"),
-                    "Last Attempt Time": ip_failed_attempts[ip][-1][0].strftime("%Y-%m-%d %H:%M:%S"),
+                    # Store datetime objects here, format to string only for display
+                    "First Attempt Time_DT": ip_failed_attempts[ip][0][0],
+                    "Last Attempt Time_DT": ip_failed_attempts[ip][-1][0],
                     "Sample Log Lines": [item[1] for item in ip_failed_attempts[ip]][:3] # Show first 3 relevant lines
                 })
     return brute_force_attempts
@@ -174,7 +176,18 @@ if st.button("Analyze Logs", type="primary"):
                 st.write(f"Found {len(brute_force_results)} potential brute-force attack patterns.")
                 
                 # Convert results to DataFrame for better display
-                df_results = pd.DataFrame(brute_force_results)
+                # Format datetime objects to strings here, not when storing in brute_force_attempts
+                formatted_results = []
+                for item in brute_force_results:
+                    formatted_results.append({
+                        "IP Address": item["IP Address"],
+                        "Failed Attempts": item["Failed Attempts"],
+                        "First Attempt Time": item["First Attempt Time_DT"].strftime("%Y-%m-%d %H:%M:%S"),
+                        "Last Attempt Time": item["Last Attempt Time_DT"].strftime("%Y-%m-%d %H:%M:%S"),
+                        "Sample Log Lines": item["Sample Log Lines"]
+                    })
+
+                df_results = pd.DataFrame(formatted_results)
                 # Reorder columns for better readability
                 df_results = df_results[["IP Address", "Failed Attempts", "First Attempt Time", "Last Attempt Time", "Sample Log Lines"]]
                 st.dataframe(df_results, use_container_width=True)
