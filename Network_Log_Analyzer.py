@@ -7,29 +7,23 @@ from datetime import datetime, timedelta
 
 def parse_log_line(log_line):
     """
-    Parses a single log line to extract timestamp, IP address, and event type.
-    This regex is designed to be somewhat flexible for common log formats.
-    It looks for:
-    - A timestamp (e.g., "Jul 15 15:00:00", "2025-07-15 15:00:00")
-    - An IP address (IPv4)
-    - Keywords like "failed", "failure", "invalid password", "authentication failure"
+    Parses a single log line to extract timestamp, IP address, username, and event type (failed/successful).
+    This regex is designed to be flexible for common SSH/router log formats.
     """
-    # Regex to capture common log patterns for failed login attempts
-    # It tries to capture a date/time, then looks for keywords and an IP address.
-    # This regex is a starting point and might need adjustment based on actual log formats.
-    
-    # Example patterns it tries to match:
-    # "Jul 15 15:00:00 router auth: Failed login from 192.168.1.1"
-    # "2025-07-15 15:00:00 [SSH] Authentication failure for user root from 192.168.1.1"
-    
     # Updated regex to be more robust for various timestamp and message formats
-    # It captures a general timestamp, then searches for keywords and an IP.
+    # It captures a general timestamp, then searches for keywords for failed or successful attempts,
+    # optionally captures a username, and finally captures an IP address.
     pattern = re.compile(
         r'(?P<timestamp>\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}(?:\s+\d{4})?|\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})' # Flexible timestamp
         r'.*?' # Non-greedy match for anything in between
-        r'(?:failed|failure|invalid password|authentication failure|refused connect)' # Keywords for failed attempts
+        r'(?:'
+            r'(?P<failed_event>failed|failure|invalid password|authentication failure|refused connect)' # Keywords for failed attempts
+            r'|'
+            r'(?P<success_event>accepted password|logged in|authentication success|connected)' # Keywords for successful attempts
+        r')'
+        r'(?: for (?P<username>\S+))?' # Optional username capture (e.g., "for user root")
         r'.*?' # Non-greedy match for anything in between
-        r'(?:from|for|on)\s+(?P<ip_address>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # IP address
+        r'(?:from|on)\s+(?P<ip_address>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})' # IP address
         , re.IGNORECASE # Ignore case for keywords
     )
     
@@ -37,12 +31,18 @@ def parse_log_line(log_line):
     if match:
         timestamp_str = match.group('timestamp').strip()
         ip_address = match.group('ip_address')
+        username = match.group('username') if match.group('username') else 'N/A' # Default to N/A if no username found
         
-        # Attempt to parse various timestamp formats
+        event_type = 'unknown'
+        if match.group('failed_event'):
+            event_type = 'failed_login'
+        elif match.group('success_event'):
+            event_type = 'successful_login'
+        
         dt_obj = None
         for fmt in ["%b %d %H:%M:%S %Y", "%b %d %H:%M:%S", "%Y-%m-%d %H:%M:%S"]:
             try:
-                # If year is missing, assume current year for parsing
+                # If year is missing (e.g., "Jul 15 15:00:00"), assume current year for parsing
                 if "%Y" not in fmt and len(timestamp_str.split()) == 3:
                     current_year = datetime.now().year
                     dt_obj = datetime.strptime(f"{timestamp_str} {current_year}", fmt + " %Y")
@@ -53,7 +53,13 @@ def parse_log_line(log_line):
                 continue
         
         if dt_obj:
-            return {'timestamp': dt_obj, 'ip_address': ip_address, 'log_line': log_line.strip()}
+            return {
+                'timestamp': dt_obj,
+                'ip_address': ip_address,
+                'username': username,
+                'event_type': event_type,
+                'log_line': log_line.strip()
+            }
     return None
 
 def analyze_brute_force(parsed_logs, time_window_minutes=1, max_attempts=5):
@@ -69,13 +75,14 @@ def analyze_brute_force(parsed_logs, time_window_minutes=1, max_attempts=5):
     if not parsed_logs:
         return []
 
-    # Sort logs by timestamp to process chronologically
-    parsed_logs.sort(key=lambda x: x['timestamp'])
+    # Filter for only failed login attempts for brute-force analysis
+    failed_logs = [log for log in parsed_logs if log['event_type'] == 'failed_login']
+    failed_logs.sort(key=lambda x: x['timestamp'])
 
     brute_force_attempts = []
     ip_failed_attempts = {} # Stores {ip: [(timestamp, log_line), ...]}
 
-    for log in parsed_logs:
+    for log in failed_logs: # Iterate only through failed logs
         ip = log['ip_address']
         timestamp = log['timestamp']
 
@@ -96,12 +103,11 @@ def analyze_brute_force(parsed_logs, time_window_minutes=1, max_attempts=5):
             # Only add if this specific IP hasn't been flagged recently
             # This prevents duplicate flags for the same ongoing attack
             
-            # Check if this IP was already flagged very recently to avoid spamming
             already_flagged_recently = False
             for flagged_item in brute_force_attempts:
-                # IMPORTANT FIX: Compare datetime objects directly
-                # flagged_item['Last Attempt Time'] must be a datetime object here
-                if flagged_item['IP Address'] == ip and (timestamp - flagged_item['Last Attempt Time_DT']).total_seconds() < (time_window_minutes * 60 / 2): 
+                # Compare datetime objects directly for recency check
+                if flagged_item['IP Address'] == ip and \
+                   (timestamp - flagged_item['Last Attempt Time_DT']).total_seconds() < (time_window_minutes * 60 / 2): 
                     already_flagged_recently = True
                     break
             
@@ -115,6 +121,23 @@ def analyze_brute_force(parsed_logs, time_window_minutes=1, max_attempts=5):
                     "Sample Log Lines": [item[1] for item in ip_failed_attempts[ip]][:3] # Show first 3 relevant lines
                 })
     return brute_force_attempts
+
+def analyze_successful_connections(parsed_logs):
+    """
+    Analyzes parsed logs for successful connection attempts.
+    Returns:
+        list of dict: Detected successful connections.
+    """
+    successful_connections = []
+    for log in parsed_logs:
+        if log['event_type'] == 'successful_login':
+            successful_connections.append({
+                "Timestamp": log['timestamp'].strftime("%Y-%m-%d %H:%M:%S"),
+                "IP Address": log['ip_address'],
+                "Username": log['username'],
+                "Log Line": log['log_line']
+            })
+    return successful_connections
 
 # --- Streamlit User Interface ---
 
@@ -153,56 +176,75 @@ max_failed_attempts = st.sidebar.slider(
 
 if st.button("Analyze Logs", type="primary"):
     if uploaded_log_file is not None:
-        st.spinner("Analyzing logs... This might take a moment for large files.")
-        
-        # Read file content
-        log_content = uploaded_log_file.getvalue().decode("utf-8", errors='ignore')
-        log_lines = log_content.splitlines()
+        with st.spinner("Analyzing logs... This might take a moment for large files."):
+            # Read file content
+            log_content = uploaded_log_file.getvalue().decode("utf-8", errors='ignore')
+            log_lines = log_content.splitlines()
 
-        parsed_logs = []
-        for line in log_lines:
-            parsed = parse_log_line(line)
-            if parsed:
-                parsed_logs.append(parsed)
-        
-        if not parsed_logs:
-            st.warning("No relevant log entries (failed login attempts) found in the uploaded file with the current parsing rules. Please ensure your log format is compatible or try a different log file.")
-        else:
-            st.subheader("Analysis Results:")
-            brute_force_results = analyze_brute_force(parsed_logs, time_window, max_failed_attempts)
-
-            if brute_force_results:
-                st.error(f"🚨 **Brute-Force Attempts Detected!** 🚨")
-                st.write(f"Found {len(brute_force_results)} potential brute-force attack patterns.")
-                
-                # Convert results to DataFrame for better display
-                # Format datetime objects to strings here, not when storing in brute_force_attempts
-                formatted_results = []
-                for item in brute_force_results:
-                    formatted_results.append({
-                        "IP Address": item["IP Address"],
-                        "Failed Attempts": item["Failed Attempts"],
-                        "First Attempt Time": item["First Attempt Time_DT"].strftime("%Y-%m-%d %H:%M:%S"),
-                        "Last Attempt Time": item["Last Attempt Time_DT"].strftime("%Y-%m-%d %H:%M:%S"),
-                        "Sample Log Lines": item["Sample Log Lines"]
-                    })
-
-                df_results = pd.DataFrame(formatted_results)
-                # Reorder columns for better readability
-                df_results = df_results[["IP Address", "Failed Attempts", "First Attempt Time", "Last Attempt Time", "Sample Log Lines"]]
-                st.dataframe(df_results, use_container_width=True)
-                
-                st.markdown("""
-                ---
-                **What to do?**
-                * **Change Passwords:** Immediately change passwords for any accounts being targeted.
-                * **Block IP:** Consider blocking the detected IP addresses in your router's firewall settings.
-                * **Enable 2FA:** Activate Two-Factor Authentication (2FA) on all your accounts.
-                * **Update Firmware:** Ensure your router's firmware is up to date.
-                """)
+            parsed_logs = []
+            for line in log_lines:
+                parsed = parse_log_line(line)
+                if parsed:
+                    parsed_logs.append(parsed)
+            
+            if not parsed_logs:
+                st.warning("No relevant log entries (login attempts) found in the uploaded file with the current parsing rules. Please ensure your log format is compatible or try a different log file.")
             else:
-                st.success("🎉 **No significant brute-force attempts detected** with the current settings. Your network seems secure from this type of attack based on the provided logs.")
-                st.info("You can adjust the 'Analysis Settings' in the sidebar to change sensitivity.")
+                st.subheader("Analysis Results:")
+                
+                # Create tabs for different analysis types
+                tab1, tab2 = st.tabs(["Brute-Force Attempts", "Successful Connections"])
+
+                with tab1:
+                    brute_force_results = analyze_brute_force(parsed_logs, time_window, max_failed_attempts)
+                    if brute_force_results:
+                        st.error(f"🚨 **Brute-Force Attempts Detected!** 🚨")
+                        st.write(f"Found {len(brute_force_results)} potential brute-force attack patterns.")
+                        
+                        # Convert results to DataFrame for better display
+                        formatted_brute_force_results = []
+                        for item in brute_force_results:
+                            formatted_brute_force_results.append({
+                                "IP Address": item["IP Address"],
+                                "Failed Attempts": item["Failed Attempts"],
+                                "First Attempt Time": item["First Attempt Time_DT"].strftime("%Y-%m-%d %H:%M:%S"),
+                                "Last Attempt Time": item["Last Attempt Time_DT"].strftime("%Y-%m-%d %H:%M:%S"),
+                                "Sample Log Lines": "\n".join(item["Sample Log Lines"]) # Join sample lines for display
+                            })
+
+                        df_brute_force = pd.DataFrame(formatted_brute_force_results)
+                        # Reorder columns for better readability
+                        df_brute_force = df_brute_force[["IP Address", "Failed Attempts", "First Attempt Time", "Last Attempt Time", "Sample Log Lines"]]
+                        st.dataframe(df_brute_force, use_container_width=True)
+                        
+                        st.markdown("""
+                        ---
+                        **What to do?**
+                        * **Change Passwords:** Immediately change passwords for any accounts being targeted.
+                        * **Block IP:** Consider blocking the detected IP addresses in your router's firewall settings.
+                        * **Enable 2FA:** Activate Two-Factor Authentication (2FA) on all your accounts.
+                        * **Update Firmware:** Ensure your router's firmware is up to date.
+                        """)
+                    else:
+                        st.success("🎉 **No significant brute-force attempts detected** with the current settings. Your network seems secure from this type of attack based on the provided logs.")
+                        st.info("You can adjust the 'Analysis Settings' in the sidebar to change sensitivity.")
+
+                with tab2:
+                    st.subheader("Successful Connections")
+                    successful_conn_results = analyze_successful_connections(parsed_logs)
+                    
+                    if successful_conn_results:
+                        st.success(f"✅ **{len(successful_conn_results)} Successful Connections Found.**")
+                        df_successful_conn = pd.DataFrame(successful_conn_results)
+                        st.dataframe(df_successful_conn, use_container_width=True)
+                        st.markdown("""
+                        ---
+                        **Review these connections:**
+                        * Ensure all successful logins are from expected users and devices.
+                        * Investigate any unfamiliar IP addresses or usernames.
+                        """)
+                    else:
+                        st.info("No successful connections found in the provided logs with the current parsing rules.")
 
     else:
         st.warning("Please upload a log file to start the analysis.")
